@@ -98,6 +98,7 @@ class MCPClient {
                 }
             }
         }));
+        // console.log("\n可用工具列表:", JSON.stringify(openAITools, null, 2));
 
         const response = await this.openai.chat.completions.create({
             model: "qwen-plus",
@@ -105,48 +106,54 @@ class MCPClient {
             tools: openAITools,
         });
 
-        const finalText = [];
-        const toolResults = [];
-
         const choice = response.choices[0];
         if (!choice.message.tool_calls) {
-            return choice.message.content || "";
+            return choice.message.content || "抱歉，我不太理解您的问题。";
         }
 
+        const results = [];
         for (const toolCall of choice.message.tool_calls) {
             const toolName = toolCall.function.name;
             const toolArgs = JSON.parse(toolCall.function.arguments);
 
+            console.log(`\n大模型决定调用工具: ${toolName}`);
+            console.log("调用参数:", toolArgs);
+            
             const result = await this.mcp.callTool({
                 name: toolName,
                 arguments: toolArgs,
             });
-            toolResults.push(result);
-            finalText.push(
-                `[调用工具 ${toolName}，参数 ${JSON.stringify(toolArgs)}]`
-            );
+
+            if (result.content) {
+                if (Array.isArray(result.content)) {
+                    const text = result.content.map(item => item.text).join('');
+                    results.push(text);
+                } else {
+                    results.push(result.content);
+                }
+            }
 
             messages.push({
                 role: "assistant",
-                content: "",
+                content: null,
                 tool_calls: [toolCall],
             });
 
             messages.push({
                 role: "tool",
-                content: result.content as string,
+                content: JSON.stringify(result.content),
                 tool_call_id: toolCall.id,
             });
-
-            const followUpResponse = await this.openai.chat.completions.create({
-                model: "gpt-4-turbo-preview",
-                messages,
-            });
-
-            finalText.push(followUpResponse.choices[0].message.content || "");
         }
 
-        return finalText.join("\n");
+        const finalResponse = await this.openai.chat.completions.create({
+            model: "qwen-plus",
+            messages,
+        });
+        console.log("大模型生成的最终回答:", finalResponse.choices[0].message.content);
+
+        results.push(finalResponse.choices[0].message.content || "");
+        return results.join("\n\n");
     }
 
     // 对话循环
@@ -166,8 +173,10 @@ class MCPClient {
                     break;
                 }
                 const response = await this.processQuery(message);
-                console.log("\n" + response);
+                console.log("\n响应:", response);
             }
+        } catch (e) {
+            console.log("错误:", e);
         } finally {
             rl.close();
         }
